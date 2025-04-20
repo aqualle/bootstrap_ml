@@ -1,0 +1,117 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.datasets import load_breast_cancer, load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, f1_score
+from sklearn.utils import resample
+
+# Настройки для воспроизводимости
+np.random.seed(42)
+sns.set_style("whitegrid")
+
+# Загрузка датасетов
+def load_data(dataset_name):
+    if dataset_name == "breast_cancer":
+        data = load_breast_cancer()
+    elif dataset_name == "iris":
+        data = load_iris()
+    elif dataset_name == "diabetes":
+        df = pd.read_csv("https://raw.githubusercontent.com/plotly/datasets/master/diabetes.csv")
+        X = df.drop("Outcome", axis=1).values
+        y = df["Outcome"].values
+        return X, y
+    else:
+        raise ValueError("Unknown dataset")
+    return data.data, data.target
+
+# Бутстрэп-анализ
+def bootstrap_evaluate(model, X_train, y_train, X_test, y_test, n_bootstrap=500):
+    accuracies, f1_scores = [], []
+    for _ in range(n_bootstrap):
+        X_boot, y_boot = resample(X_train, y_train, replace=True)
+        model.fit(X_boot, y_boot)
+        y_pred = model.predict(X_test)
+        accuracies.append(accuracy_score(y_test, y_pred))
+        f1_scores.append(f1_score(y_test, y_pred, average="weighted"))
+    return {
+        "mean_accuracy": np.mean(accuracies),
+        "std_accuracy": np.std(accuracies),
+        "ci_accuracy": np.percentile(accuracies, [2.5, 97.5]),
+        "mean_f1": np.mean(f1_scores),
+        "std_f1": np.std(f1_scores)
+    }
+
+# Эксперимент
+def run_experiment(datasets, sample_sizes):
+    results = []
+    for dataset_name in datasets:
+        X, y = load_data(dataset_name)
+        X = StandardScaler().fit_transform(X)
+        
+        for sample_size in sample_sizes:
+            # Искусственное ограничение данных
+            X_small, _, y_small, _ = train_test_split(
+                X, y, train_size=sample_size, stratify=y, random_state=42
+            )
+            
+            # Стратифицированное разделение
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_small, y_small, test_size=0.3, stratify=y_small, random_state=42
+            )
+            
+            # Инициализация моделей
+            models = {
+                "Logistic Regression": LogisticRegression(max_iter=1000),
+                "SVM": SVC(kernel="linear", C=1),
+                "Random Forest": RandomForestClassifier(n_estimators=100, max_depth=5)
+            }
+            
+            # Обучение и оценка
+            for model_name, model in models.items():
+                metrics = bootstrap_evaluate(model, X_train, y_train, X_test, y_test)
+                results.append({
+                    "Dataset": dataset_name,
+                    "Sample Size": f"{int(sample_size*100)}%",
+                    "Model": model_name,
+                    **metrics
+                })
+                print(f"[{dataset_name}] {model_name} ({sample_size*100}%) completed")
+    
+    return pd.DataFrame(results)
+
+# Визуализация результатов
+def visualize_results(results_df):
+    plt.figure(figsize=(12, 6))
+    sns.barplot(
+        x="Model", 
+        y="mean_accuracy", 
+        hue="Sample Size", 
+        data=results_df, 
+        ci="sd",
+        palette="viridis"
+    )
+    plt.title("Accuracy with 95% Confidence Intervals")
+    plt.ylabel("Mean Accuracy")
+    plt.savefig("accuracy_ci.png", dpi=300)
+    plt.close()
+
+if __name__ == "__main__":
+    # Параметры эксперимента
+    datasets = ["breast_cancer", "diabetes", "iris"]
+    sample_sizes = [0.1, 0.2, 0.3]
+    
+    # Запуск эксперимента
+    results_df = run_experiment(datasets, sample_sizes)
+    
+    # Сохранение результатов
+    results_df.to_csv("bootstrap_results.csv", index=False)
+    
+    # Визуализация
+    visualize_results(results_df)
+    print("Experiment completed! Results saved to bootstrap_results.csv and accuracy_ci.png")
